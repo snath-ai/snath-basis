@@ -1,0 +1,44 @@
+# ─── Secrets / credentials ───
+.env
+.env.*
+*.env
+*key*.json
+*.pem
+*.key
+secrets.*
+
+# ─── Python ───
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+.ipynb_checkpoints/
+
+# ─── Model weights & downloaded models (genesis-anchored separately, not git) ───
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+.cache/
+
+# ─── Market data & caches (public, but large / regenerable — not git-tracked) ───
+data/
+cache/
+*.parquet
+*.csv
+*.feather
+
+# ─── Runtime outputs ───
+logs/
+*_logs/
+*.jsonl
+*.log
+
+# ─── Local tooling / OS ───
+.claude/settings.local.json
+.DS_Store
+.idea/
+.vscode/
