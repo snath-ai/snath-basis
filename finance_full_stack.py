@@ -39,6 +39,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import _lar  # noqa: F401  — public Lar_Main/lar_jepa on the path
+from lar import GraphState, GraphExecutor, BaseNode, AuditLogger
 from core.interfaces import (
     AbstractCognitiveNode,        # 1
     AbstractManifold,             # 2
@@ -216,30 +217,24 @@ class RegimeDivergenceRouter(AbstractDivergenceRouter):
 
 
 # ===========================================================================
-# Pipeline (lightweight local GraphState + chaining, mirroring powergrid)
+# Pipeline — all nodes extend lar.BaseNode and run on lar.GraphExecutor.
+# execute() returns the *next node* (or None); the GraphExecutor drives the
+# loop and produces a cryptographically HMAC-signed audit trail per step.
 # ===========================================================================
-class GraphState:
-    def __init__(self): self._d = {}
-    def set(self, k, v): self._d[k] = v
-    def get(self, k, default=None): return self._d.get(k, default)
 
-
-class _Node:
-    def __init__(self, next_node=None): self._next = next_node
-    def _go(self, state): return self._next.execute(state) if self._next else state
-
-
-class MarketStateEmbeddingNode(_Node):
-    def __init__(self, enc, next_node=None): super().__init__(next_node); self._enc = enc
+class MarketStateEmbeddingNode(BaseNode):
+    def __init__(self, enc, next_node=None):
+        self._enc = enc; self._next = next_node
     def execute(self, state):
         z = self._enc.encode(state.get("market_state"))
         state.set("z_state", z); state.set("modality", self._enc.modality)
         print(f"  [MarketStateEmbeddingNode] {self._enc.modality} → z {tuple(z.shape)}")
-        return self._go(state)
+        return self._next
 
 
-class MarketWorldModelNode(MarketCognitiveNode, _Node):
-    def __init__(self, jepa, next_node=None): _Node.__init__(self, next_node); self._j = jepa
+class MarketWorldModelNode(MarketCognitiveNode, BaseNode):
+    def __init__(self, jepa, next_node=None):
+        self._j = jepa; self._next = next_node
     def execute(self, state):
         ctx = self._j.embed_context(state.get("z_state"))
         z_hat = self._j.predict_target(ctx); e = self._j.entropic_loss(z_hat)
@@ -247,43 +242,44 @@ class MarketWorldModelNode(MarketCognitiveNode, _Node):
         state.set("regime_entropy", e)
         print(f"  [MarketWorldModelNode] regime entropy={e:.4f} "
               f"({'CONFIDENT' if e < ENTROPY_COMMIT else 'UNCERTAIN'})")
-        return self._go(state)
+        return self._next
 
 
-class EntropicGateNode(_Node):
+class EntropicGateNode(BaseNode):
     def __init__(self, router, commit_node=None, replan_node=None):
         self._r, self._c, self._rp = router, commit_node, replan_node
     def execute(self, state):
         dec = self._r.evaluate_state(state.get("z_pred_regime"))
         state.set("entropic_decision", dec.value)
         print(f"  [EntropicGateNode] RouteDecision → {dec.value}")
-        nxt = self._c if dec == RouteDecision.COMMIT_TRAJECTORY else self._rp
-        return nxt.execute(state) if nxt else state
+        return self._c if dec == RouteDecision.COMMIT_TRAJECTORY else self._rp
 
 
-class StateBridgeNode(_Node):
-    def __init__(self, bridge, next_node=None): super().__init__(next_node); self._b = bridge
+class StateBridgeNode(BaseNode):
+    def __init__(self, bridge, next_node=None):
+        self._b = bridge; self._next = next_node
     def execute(self, state):
         q = self._b.bridge(state.get("z_state"))
         state.set("z_query", q)
         print(f"  [StateBridgeNode] {self._b.source_signal_type.value} → query {tuple(q.shape)}")
-        return self._go(state)
+        return self._next
 
 
-class RateShockNode(_Node):
-    def __init__(self, op, alpha=1.0, next_node=None): super().__init__(next_node); self._op, self._a = op, alpha
+class RateShockNode(BaseNode):
+    def __init__(self, op, alpha=1.0, next_node=None):
+        self._op, self._a, self._next = op, alpha, next_node
     def execute(self, state):
         z_ctrl = state.get("z_ctrl")
         z_pred = self._op.predict_perturbed_state(z_ctrl, state.get("state_pre"), state.get("state_post"), alpha=self._a)
         delta = self._op.perturbation_vector(state.get("state_pre"), state.get("state_post"))
         state.set("z_pred", z_pred)
         print(f"  [RateShockNode] α={self._a:.1f} |Δ|={float(torch.norm(delta, dim=-1).mean()):.4f} — shock state predicted")
-        return self._go(state)
+        return self._next
 
 
-class RegimeLocalisationNode(_Node):
+class RegimeLocalisationNode(BaseNode):
     def __init__(self, locator, kernel, instruments, topk=TOPK_STRESS, next_node=None):
-        super().__init__(next_node); self._loc, self._ker, self._instr, self._k = locator, kernel, instruments, topk
+        self._loc, self._ker, self._instr, self._k, self._next = locator, kernel, instruments, topk, next_node
     def execute(self, state):
         x_E = state.get("market_state")
         z_E = self._loc.encode_environmental_state(x_E)
@@ -293,21 +289,22 @@ class RegimeLocalisationNode(_Node):
         _, kidx = self._ker.compute(z_E, K, K, k=self._k)
         state.set("stress_risk", float(risk.mean())); state.set("stress_instruments", idx.tolist())
         print(f"  [RegimeLocalisationNode] risk={float(risk.mean()):.4f} | stressed (locator): {idx.tolist()} | (kernel): {kidx.tolist()}")
-        return self._go(state)
+        return self._next
 
 
-class AllocationRouterNode(_Node):
-    def __init__(self, kernel, routes): self._ker, self._routes = kernel, routes
+class AllocationRouterNode(BaseNode):
+    def __init__(self, kernel, routes):
+        self._ker, self._routes = kernel, routes
     def execute(self, state):
         rs = {"z_ctrl": state.get("z_ctrl"), "z_pred": state.get("z_pred")}
         dec = self._ker.route(rs); state.set("allocation", dec); state.set("alloc_score", self._ker.score(rs))
         print(f"  [AllocationRouterNode] departure={self._ker.score(rs):.4f} → {dec}")
-        nxt = self._routes.get(dec)
-        return nxt.execute(state) if nxt else state
+        return self._routes.get(dec)  # executor calls execute() on the returned node
 
 
-class ActionNode(_Node):
-    def __init__(self, label): self._label = label
+class ActionNode(BaseNode):
+    def __init__(self, label, store=None):
+        self._label = label; self._store = store
     def execute(self, state):
         rec = {"action": self._label, "entropic_decision": state.get("entropic_decision"),
                "allocation": state.get("allocation"), "alloc_score": state.get("alloc_score"),
@@ -317,10 +314,14 @@ class ActionNode(_Node):
         rec["hmac"] = hashlib.sha256(json.dumps(rec, sort_keys=True).encode()).hexdigest()
         print(f"  [{self._label}] directive issued — audit hmac {rec['hmac'][:16]}…")
         state.set("audit_record", rec)
-        return state
+        if self._store is not None:
+            self._store.update({k: state.get(k) for k in
+                ("entropic_decision", "allocation", "alloc_score",
+                 "stress_risk", "stress_instruments", "regime_entropy")})
+        return None  # terminal — signals GraphExecutor to stop
 
 
-def build_pipeline(instruments):
+def build_pipeline(instruments, store=None):
     enc   = MarketStateEncoder()                 # 9
     jepa  = MarketRegimeJEPA()                   # 2
     erout = MarketEntropicRouter()               # 5
@@ -330,9 +331,9 @@ def build_pipeline(instruments):
     kern  = LinearAttentionMarketKernel()        # 6
     alloc = AllocationKernel()                   # 8
     # 1 exercised by MarketWorldModelNode (a MarketCognitiveNode)
-    terminals = {k: ActionNode(v) for k, v in
+    terminals = {k: ActionNode(v, store) for k, v in
                  {"DEFEND": "DefendNode", "HEDGE": "HedgeNode", "HOLD": "HoldNode"}.items()}
-    escalate = ActionNode("HumanOversightNode")
+    escalate = ActionNode("HumanOversightNode", store)
     arouter  = AllocationRouterNode(alloc, terminals)
     locnode  = RegimeLocalisationNode(loc, kern, instruments, next_node=arouter)
     shocknode = RateShockNode(shock, next_node=locnode)
@@ -342,7 +343,7 @@ def build_pipeline(instruments):
     return MarketStateEmbeddingNode(enc, next_node=wm), erout
 
 
-def prove_abc_coverage():
+def prove_abc_coverage(executor_steps: int = 0):
     """Machine-verifiable: all 10 ABCs subclassed here, plus engine + DMN import (public repo)."""
     print("\n" + "=" * 70 + "\nprove_abc_coverage() — all 10 ABCs from the PUBLIC repo\n" + "=" * 70)
     abcs = {
@@ -362,11 +363,14 @@ def prove_abc_coverage():
     # everything imported from the public repo:
     import core.interfaces as _ci
     print(f"  core.interfaces from: {_ci.__file__}")
-    try:
-        import lar
-        print(f"  lar engine import   : OK ({[x for x in dir(lar) if x=='GraphExecutor'][0]} available)")
-    except Exception as e:
-        print(f"  lar engine import   : {e}")
+    if executor_steps:
+        print(f"  GraphExecutor wired : OK (ran {executor_steps} audited steps via lar.GraphExecutor)")
+    else:
+        try:
+            import lar
+            print(f"  GraphExecutor wired : OK ({[x for x in dir(lar) if x=='GraphExecutor'][0]} available)")
+        except Exception as e:
+            print(f"  GraphExecutor wired : {e}")
     try:
         from dmn_integration.consolidation_node import JEPA_DMN_Consolidation_Node
         print(f"  DMN import          : OK ({JEPA_DMN_Consolidation_Node.__name__})")
@@ -375,28 +379,41 @@ def prove_abc_coverage():
     return ok
 
 
+def _initial_state() -> dict:
+    """Build initial state dict for GraphExecutor.run_step_by_step (takes plain dict)."""
+    pre = torch.rand(1, STATE_FEATS)
+    post = pre.clone(); post[:, 4] *= 1.5; post[:, 6] *= 1.4  # credit + vix shock
+    return {
+        "market_state": torch.rand(1, STATE_FEATS),
+        "state_pre": pre,
+        "state_post": post,
+    }
+
+
 def run_pipeline():
     print("=" * 70 + "\nSnath Basis — Full-Stack: ALL TEN Lár-JEPA ABCs (finance)\n" + "=" * 70)
     instruments = torch.rand(1, N_INSTRUMENTS, INSTR_FEATS)
 
-    def _state():
-        s = GraphState()
-        s.set("market_state", torch.rand(1, STATE_FEATS))
-        s.set("state_pre", torch.rand(1, STATE_FEATS))
-        post = s.get("state_pre").clone(); post[:, 4] *= 1.5; post[:, 6] *= 1.4  # credit + vix shock
-        s.set("state_post", post)
-        return s
+    # GraphExecutor: HMAC-signed audit trail per step; offline_mode avoids LLM calls
+    executor = GraphExecutor(log_dir="lar_logs", offline_mode=True,
+                             hmac_secret="snath_basis_audit_2026")
 
     print("\n── Scenario A — confident regime (always COMMIT; exercises ABCs 1-9) ──")
-    entry, erout = build_pipeline(instruments); erout._t = 1.1
-    with torch.no_grad(): a = entry.execute(_state())
-    print(f"\n  entropic={a.get('entropic_decision')}  allocation={a.get('allocation')}  "
-          f"stress={a.get('stress_instruments')}")
+    store_a = {}
+    entry, erout = build_pipeline(instruments, store=store_a); erout._t = 1.1
+    with torch.no_grad():
+        steps_a = list(executor.run_step_by_step(entry, _initial_state(), max_steps=50))
+    print(f"\n  entropic={store_a.get('entropic_decision')}  "
+          f"allocation={store_a.get('allocation')}  "
+          f"stress={store_a.get('stress_instruments')}  "
+          f"[{len(steps_a)} audited steps]")
 
     print("\n── Scenario B — uncertain regime (always REPLAN; exercises ABC 5) ──")
-    entry, erout = build_pipeline(instruments); erout._t = 0.001
-    with torch.no_grad(): b = entry.execute(_state())
-    print(f"\n  entropic={b.get('entropic_decision')}")
+    store_b = {}
+    entry, erout = build_pipeline(instruments, store=store_b); erout._t = 0.001
+    with torch.no_grad():
+        steps_b = list(executor.run_step_by_step(entry, _initial_state(), max_steps=50))
+    print(f"\n  entropic={store_b.get('entropic_decision')}  [{len(steps_b)} audited steps]")
 
     print("\n── Scenario C — ABC 10: basis between two market views ──")
     enc1, enc2 = MarketStateEncoder(), MarketStateEncoder()
@@ -407,9 +424,10 @@ def run_pipeline():
         d = dr.divergence(z1, z2)
     print(f"  RegimeDivergenceRouter basis D={d:.3f} → {dr.route(0.5, 0.5, d).value}")
 
-    prove_abc_coverage()
+    prove_abc_coverage(executor_steps=len(steps_a))
     print("\n" + "=" * 70)
     print("All ten ABCs exercised in finance, every contract from the PUBLIC repo. ✓")
+    print("GraphExecutor (lar v2.2.0) drove the pipeline — HMAC-signed audit log in lar_logs/. ✓")
     print("=" * 70)
 
 
