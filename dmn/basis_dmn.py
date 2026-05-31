@@ -128,8 +128,20 @@ class BasisDMN:
                 optimizer.step()
 
             pt_path = self.adapter_dir / f"{cid.replace('->', '__')}.pt"
-            torch.save({"A": A.detach(), "B": B.detach(), "target_encoder": target_enc,
-                        "cluster_id": cid, "final_loss": round(loss.item(), 6)}, str(pt_path))
+            # Gap B/C: add target_encoder type-safety + temporal decay fields so
+            # BasisAdapterRouter can (a) refuse cross-encoder injection and
+            # (b) compute trust weight W = exp(-λ·Δt) at re-arm time (Aviation pattern).
+            torch.save({
+                "A":             A.detach(),
+                "B":             B.detach(),
+                "target_encoder": target_enc,           # type-safety: "market"|"fundamentals"
+                "cluster_id":    cid,
+                "final_loss":    round(loss.item(), 6),
+                "created_at":    datetime.datetime.utcnow().isoformat() + "Z",
+                "n_events":      len(g),
+                "mean_return":   round(mean_return, 4),
+                "failure_class": "market_regime",       # for temporal decay λ table
+            }, str(pt_path))
 
             if verbose:
                 print(f"  ✓ {cid:<28} n={len(g):<3} winner={winner:<12} "

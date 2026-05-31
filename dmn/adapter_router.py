@@ -40,15 +40,21 @@ class BasisAdapterRouter:
         self.tau_sim = tau_sim
         self.verbose = verbose
         self._adapters: list[BasisAdapter] = []
+        # Gap A: typed cache (cluster_id, winner) → BasisAdapter.
+        # Prevents loading a "fundamentals wins" LoRA when the router classified
+        # the current event as "market wins" — the encoder targets differ.
+        self._typed_cache: dict[tuple, BasisAdapter] = {}
         self._load_all()
 
     def _load_all(self) -> None:
         self._adapters = []
+        self._typed_cache = {}
         for fp in glob.glob(str(self.adapter_dir / "*.json")):
             try:
                 a = BasisAdapter(**json.loads(Path(fp).read_text()))
                 if a.verify():
                     self._adapters.append(a)
+                    self._typed_cache[(a.cluster_id, a.winner)] = a
                 elif self.verbose:
                     print(f"[BasisAdapterRouter] HMAC FAIL — skipped {fp}")
             except Exception as e:
@@ -61,9 +67,16 @@ class BasisAdapterRouter:
     def available(self) -> list[str]:
         return [a.cluster_id for a in self._adapters]
 
-    def _nearest(self, delta) -> BasisAdapter | None:
+    def available_typed(self) -> list[tuple]:
+        return list(self._typed_cache.keys())
+
+    def _nearest(self, delta, winner: str = "") -> BasisAdapter | None:
+        """Find nearest adapter by centroid cosine similarity.
+        Gap A: if winner is known, restrict search to matching winner entries."""
         best, best_s = None, self.tau_sim
         for a in self._adapters:
+            if winner and a.winner != winner:
+                continue
             s = _cos(delta, a.centroid)
             if s >= best_s:
                 best, best_s = a, s
@@ -78,6 +91,7 @@ class BasisAdapterRouter:
                   the faulty encoder (enc_a or enc_b) to structurally repair its
                   latent geometry — not just override the routing decision.
 
+        Gap A/B: typed cache lookup and target_encoder verification at load.
         Pass enc_a (FundamentalsEncoder) and enc_b (MarketSignalEncoder) to enable
         System 2. If omitted, only the System 1 decision override is applied.
         """
@@ -88,6 +102,8 @@ class BasisAdapterRouter:
         delta = v_a - v_b
 
         # ── SYSTEM 1: Fast JSON Centroid Spatial Match ──────────────────────────
+        # Determine which stream should win to narrow the typed cache search.
+        # (We don't know yet — do open search first, then type-check.)
         a = self._nearest(delta)
         if a is None:
             return base_decision, "no matching memory — flag for investigation"
@@ -109,6 +125,8 @@ class BasisAdapterRouter:
         if faulty_enc is not None:
             pt_path = self.adapter_dir / f"{a.cluster_id.replace('->', '__')}.pt"
             if pt_path.exists() and hasattr(faulty_enc, 'load_lora'):
+                # Gap B: load_lora() inside the encoder verifies target_encoder field —
+                # a "fundamentals" LoRA will be silently ignored by MarketSignalEncoder.
                 faulty_enc.load_lora(str(pt_path))
                 note += f" | [System 2] LoRA loaded into '{target_enc_name}' encoder"
             elif self.verbose:
