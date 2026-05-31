@@ -1,142 +1,104 @@
 """
-Snath Basis — divergence routing for markets (architecture skeleton).
+Snath Basis — divergence routing for markets, built on the Lár engine.
 
-The same V1–V6 AbstractDivergenceRouter contract as Snath Locus, with the encoders
-swapped for a fundamentals stream and a market-signal stream. Routes on the BASIS —
-the geometric divergence between the two streams' finding distributions.
+MarketDivergenceRouter implements the published **AbstractDivergenceRouter** — the
+tenth Lár ABC (V1–V6) defined in lar_jepa/core/interfaces.py. It is content-blind:
+route() sees only the two confidence scalars and the basis (divergence) — never the
+stream content (V4). The two streams are AbstractModalEncoder implementations
+(FundamentalsEncoder, MarketSignalEncoder); stream independence (V1) is enforced at
+that encoder boundary, so the router itself never touches both encoders' state.
 
-This file is a runnable scaffold (mock encoders, numpy only) so the topology is clear
-before the real encoders and data layer are built. Run:  python basis_graph.py
+A Derivative Work of the pre-employment Lár-JEPA prior art (Apache 2.0,
+github.com/snath-ai/Lar-JEPA), in the quantitative-finance domain.
 
-Build targets (in order):
-  1. Data layer    — SEC EDGAR + price/feed ingestion (public sources only).
-  2. Stream A       — FundamentalsEncoder over balance-sheet / earnings-quality features.
-  3. Stream B       — MarketSignalEncoder (FinBERT embeddings + microstructure features).
-  4. D_hard queue   — log Investigate (high-confidence disagreement) events.
-  5. Ground truth   — realised 30/60/90d returns; label D_hard; train per-regime adapters.
-  6. Backtest       — does acting on routing decisions beat the fused baseline?
+Run:  python basis_graph.py
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
-from enum import Enum
 import numpy as np
 
-# Decision classes the two streams both predict over.
+import _lar  # noqa: F401  — places core.interfaces / core.types on the path
+from core.interfaces import AbstractDivergenceRouter
+from core.types import RouteDecision
+
+# Both streams predict over the same decision classes.
 DECISION_CLASSES = ("overweight", "neutral", "underweight")
 C = len(DECISION_CLASSES)
 
-
-def confidence_from_dist(dist) -> float:
-    """Universal stream confidence: distribution PEAKEDNESS in [0,1].
-    0 = uniform (no signal), 1 = one-hot (max signal). BOTH streams compute
-    confidence this way so the router's scalars are comparable across them."""
-    peak = (float(np.asarray(dist).max()) - 1.0 / C) / (1.0 - 1.0 / C)
-    return max(0.0, peak)
-
-
-class RouteDecision(str, Enum):
-    COMMIT_TRAJECTORY = "COMMIT_TRAJECTORY"   # Execute  — agree, both confident
-    TRIGGER_REPLAN    = "TRIGGER_REPLAN"      # Investigate — disagree, both confident
-    STRUCTURAL_IMPASSE = "STRUCTURAL_IMPASSE" # Halt/Stall — too uncertain to act
-    DEFER             = "DEFER"               # one stream confident, the other not
-
-
 # ── Routing thresholds (provisional — calibrate on realised-return backtests) ──
-# Confidence is distribution peakedness in [0,1] (see confidence_from_dist), so a
-# "confident" 3-class call sits ~0.4–0.7 and a flat one near 0. Thresholds match.
+# Confidence is distribution peakedness in [0,1] (see confidence_from_dist).
 TAU_HIGH = 0.35   # confidence floor to "act"
 TAU_LOW  = 0.12   # below this a stream carries effectively no signal
 DELTA    = 0.40   # basis (divergence) threshold separating agree / disagree
 
 
-# ── Stream encoders ───────────────────────────────────────────────────────────
-# Each returns (finding_distribution over DECISION_CLASSES, confidence scalar).
-# V1 Stream Independence: A and B share no mutable state. (Mock implementations.)
-
-class FundamentalsEncoder:
-    """Stream A — TODO: balance-sheet ratios, earnings quality, cash-flow signals."""
-    modality = "fundamentals"
-
-    def encode(self, x_fundamentals) -> tuple[np.ndarray, float]:
-        v = _softmax(np.asarray(x_fundamentals, dtype=float))
-        return v, confidence_from_dist(v)
-
-
-class MarketSignalEncoder:
-    """Stream B — TODO: FinBERT(filings/news) + order-flow / microstructure features."""
-    modality = "market_signal"
-
-    def encode(self, x_market) -> tuple[np.ndarray, float]:
-        v = _softmax(np.asarray(x_market, dtype=float))
-        return v, confidence_from_dist(v)
-
-
-# ── The router (AbstractDivergenceRouter contract, V1–V6) ─────────────────────
-class MarketDivergenceRouter:
-    """
-    V1 Stream Independence · V2 Geometric Divergence (D >= 0) · V3 Symmetry-breaking
-    allowed · V4 Content Blindness (route() sees only scalars) · V5 Routing Completeness
-    · V6 Safety-Learning Equivalence (STRUCTURAL_IMPASSE == max learning signal).
-    """
-
-    def __init__(self):
-        self.stream_a = FundamentalsEncoder()
-        self.stream_b = MarketSignalEncoder()
-
-    def encode_stream_a(self, x_a): return self.stream_a.encode(x_a)   # V1
-    def encode_stream_b(self, x_b): return self.stream_b.encode(x_b)   # V1
-
-    def divergence(self, v_a: np.ndarray, v_b: np.ndarray) -> float:    # V2–V3
-        # the BASIS: total-variation between the finding distributions, /sqrt(C)
-        return float(np.abs(v_a - v_b).sum() / np.sqrt(C))
-
-    def route(self, c_a: float, c_b: float, d: float) -> RouteDecision:  # V4–V6
-        # content-blind: scalars only
-        if max(c_a, c_b) >= TAU_HIGH and min(c_a, c_b) < TAU_LOW:
-            return RouteDecision.DEFER
-        if c_a < TAU_LOW and c_b < TAU_LOW:
-            return RouteDecision.STRUCTURAL_IMPASSE
-        if c_a >= TAU_HIGH and c_b >= TAU_HIGH:
-            return (RouteDecision.TRIGGER_REPLAN if d >= DELTA      # Investigate
-                    else RouteDecision.COMMIT_TRAJECTORY)           # Execute
-        return RouteDecision.STRUCTURAL_IMPASSE                     # Stall
-
-    def step(self, x_a, x_b) -> "BasisEvent":
-        v_a, c_a = self.encode_stream_a(x_a)
-        v_b, c_b = self.encode_stream_b(x_b)
-        d = self.divergence(v_a, v_b)
-        decision = self.route(c_a, c_b, d)
-        return BasisEvent(v_a, v_b, c_a, c_b, d, decision)
-
-
-@dataclass
-class BasisEvent:
-    v_a: np.ndarray
-    v_b: np.ndarray
-    conf_a: float
-    conf_b: float
-    basis: float
-    decision: RouteDecision
-    # TODO: realised_return (filled by ground-truth labeller) for the D_hard curriculum
+def confidence_from_dist(dist) -> float:
+    """Universal stream confidence: distribution PEAKEDNESS in [0,1].
+    0 = uniform (no signal), 1 = one-hot. BOTH streams compute confidence this way
+    so the router's scalars are comparable across them."""
+    peak = (float(np.asarray(dist).max()) - 1.0 / C) / (1.0 - 1.0 / C)
+    return max(0.0, peak)
 
 
 def _softmax(z: np.ndarray) -> np.ndarray:
-    z = z - z.max()
-    e = np.exp(z)
-    return e / e.sum()
+    z = np.asarray(z, float); z = z - z.max(); e = np.exp(z); return e / e.sum()
 
 
-# ── Demo (mock) ───────────────────────────────────────────────────────────────
+class MarketDivergenceRouter(AbstractDivergenceRouter):
+    """
+    Concrete AbstractDivergenceRouter (V1–V6) for markets.
+
+    V1 Stream Independence · V2 Geometric Divergence (D ≥ 0) · V3 Symmetry-breaking
+    allowed · V4 Content Blindness (route() reads only scalars) · V5 Routing
+    Completeness · V6 Safety-Learning Equivalence (STRUCTURAL_IMPASSE == max signal).
+    """
+
+    # V1 — the streams are upstream AbstractModalEncoders (FundamentalsEncoder /
+    # MarketSignalEncoder). Independence is enforced at that boundary, so the router
+    # never holds both encoders' state. The base/divergence pass calls them; the
+    # router only ever receives the resulting (distribution, confidence) tuples.
+    def encode_stream_a(self, x_a):
+        raise NotImplementedError(
+            "delegated to FundamentalsEncoder (AbstractModalEncoder); "
+            "V1 stream independence is enforced at the encoder boundary.")
+
+    def encode_stream_b(self, x_b):
+        raise NotImplementedError(
+            "delegated to MarketSignalEncoder (AbstractModalEncoder); "
+            "V1 stream independence is enforced at the encoder boundary.")
+
+    def divergence(self, z_a, z_b) -> float:            # V2–V3
+        # the BASIS: total-variation between the finding distributions, /sqrt(C)
+        z_a, z_b = np.asarray(z_a, float), np.asarray(z_b, float)
+        return float(np.abs(z_a - z_b).sum() / np.sqrt(C))
+
+    def route(self, confidence_a: float, confidence_b: float,
+              divergence: float) -> RouteDecision:       # V4–V6 (content-blind)
+        c_a, c_b, d = confidence_a, confidence_b, divergence
+        # Defer (one stream confident, the other silent) → commit to the confident
+        # stream per V5; not a separate enum value.
+        if max(c_a, c_b) >= TAU_HIGH and min(c_a, c_b) < TAU_LOW:
+            return RouteDecision.COMMIT_TRAJECTORY
+        if c_a < TAU_LOW and c_b < TAU_LOW:
+            return RouteDecision.STRUCTURAL_IMPASSE       # Halt — no signal
+        if c_a >= TAU_HIGH and c_b >= TAU_HIGH:
+            return (RouteDecision.TRIGGER_REPLAN          # Investigate — confident disagreement
+                    if d >= DELTA else RouteDecision.COMMIT_TRAJECTORY)  # Execute — agree
+        return RouteDecision.STRUCTURAL_IMPASSE           # Stall — middling
+
+
 if __name__ == "__main__":
-    router = MarketDivergenceRouter()
-    scenarios = {
-        "agree (commit)":        ([3.0, 0.2, 0.1], [2.8, 0.3, 0.1]),
-        "disagree (investigate)":([3.0, 0.1, 0.1], [0.1, 0.1, 3.0]),
-        "uncertain (impasse)":   ([0.2, 0.1, 0.15], [0.1, 0.2, 0.15]),
-    }
-    print("Snath Basis — divergence routing demo\n" + "=" * 44)
-    for name, (a, b) in scenarios.items():
-        ev = router.step(a, b)
-        print(f"{name:<24} basis D={ev.basis:.3f}  "
-              f"conf=({ev.conf_a:.2f},{ev.conf_b:.2f})  -> {ev.decision.value}")
+    r = MarketDivergenceRouter()
+    print("Snath Basis — MarketDivergenceRouter  (AbstractDivergenceRouter V1–V6)")
+    print("=" * 64)
+    cases = [
+        ("agree -> execute",        [0.70, 0.20, 0.10], [0.68, 0.22, 0.10], 0.50, 0.50),
+        ("disagree -> investigate", [0.70, 0.20, 0.10], [0.10, 0.20, 0.70], 0.50, 0.50),
+        ("one silent -> commit",    [0.70, 0.20, 0.10], [0.36, 0.34, 0.30], 0.50, 0.05),
+        ("both unsure -> impasse",  [0.36, 0.34, 0.30], [0.34, 0.33, 0.33], 0.05, 0.04),
+    ]
+    for label, va, vb, ca, cb in cases:
+        d = r.divergence(np.array(va), np.array(vb))
+        print(f"  {label:<26} D={d:.2f}  conf=({ca},{cb}) -> {r.route(ca, cb, d).value}")
+    print("\nMarketDivergenceRouter is a subclass of the published AbstractDivergenceRouter:",
+          issubclass(MarketDivergenceRouter, AbstractDivergenceRouter))

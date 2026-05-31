@@ -1,16 +1,15 @@
 """
-Snath Basis — Stream B: MarketSignalEncoder.
+Snath Basis — Stream B: MarketSignalEncoder (an AbstractModalEncoder).
 
-The market-side counterpart to the FundamentalsEncoder. It reads what the *market*
-is saying — price momentum, trend, news sentiment, volume conviction — and emits a
-distribution over the same decision classes plus a confidence, exactly like Stream A.
+The market-side counterpart to the FundamentalsEncoder, implementing the same
+published **AbstractModalEncoder** (M1–M3) contract. Reads what the market is saying —
+price momentum, trend, news sentiment, volume conviction — and emits a distribution
+over the same decision classes plus a confidence (volatility damps it).
 
 Lightweight by design (no model downloads): sentiment is a transparent lexicon scorer
-that FinBERT will later drop in to replace. Volatility damps confidence — a market
-shouting through high noise is less trustworthy.
+that FinBERT later drops in to replace.
 
-With both streams real, the BASIS between them is a genuine fundamentals-vs-market
-divergence: the cases where the balance sheet and the tape disagree.
+Derivative Work of the pre-employment Lár-JEPA prior art (Apache 2.0), finance domain.
 
 Run:  python market_encoder.py
 """
@@ -19,9 +18,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import numpy as np
-from basis_graph import confidence_from_dist   # shared confidence definition
 
-# Directional market factors: (weight, orientation +1 = higher is more bullish).
+import _lar  # noqa: F401
+from core.interfaces import AbstractModalEncoder
+from basis_graph import confidence_from_dist, DECISION_CLASSES
+
 MARKET_FACTORS = {
     "momentum_12_1":   (0.35, +1),   # 12-1 month price momentum
     "price_vs_200dma": (0.25, +1),   # trend: % above/below 200-day MA
@@ -30,7 +31,6 @@ MARKET_FACTORS = {
 }
 _VOL_FLOOR, _VOL_K = 0.25, 2.0       # volatility above the floor shrinks confidence
 
-# ── transparent lexicon sentiment (FinBERT slots in here later) ───────────────
 _POS = {"beat", "beats", "raise", "raises", "raised", "surge", "surges", "growth",
         "strong", "upgrade", "record", "launch", "buyback", "dividend", "favorite",
         "squeeze", "rally", "bullish", "gain", "gains", "tops", "soars"}
@@ -40,7 +40,6 @@ _NEG = {"miss", "misses", "cut", "cuts", "downgrade", "weak", "concern", "concer
 
 
 def lexicon_sentiment(headlines: list[str]) -> float:
-    """Net sentiment in [-1, 1] from a positive/negative word lexicon."""
     toks = re.findall(r"[a-z]+", " ".join(headlines).lower())
     pos = sum(t in _POS for t in toks)
     neg = sum(t in _NEG for t in toks)
@@ -53,23 +52,33 @@ class _Universe:
     std:  dict
 
 
-class MarketSignalEncoder:
-    modality = "market_signal"
+class MarketSignalEncoder(AbstractModalEncoder):
 
     def __init__(self, temperature: float = 1.2):
         self.temp = temperature
         self._uni: _Universe | None = None
 
+    # ── AbstractModalEncoder contract (M1–M3) ─────────────────────────────────
+    @property
+    def output_dim(self) -> int:
+        return len(DECISION_CLASSES)
+
+    @property
+    def modality(self) -> str:
+        return "market_signal"
+
+    def encode(self, company: dict) -> np.ndarray:
+        return self.score(company)[0]
+
+    # ── encoder internals ─────────────────────────────────────────────────────
     def _features(self, company: dict) -> dict:
         sent = company.get("sentiment")
         if sent is None and "headlines" in company:
             sent = lexicon_sentiment(company["headlines"])
-        return {
-            "momentum_12_1":   company["momentum_12_1"],
-            "price_vs_200dma": company["price_vs_200dma"],
-            "sentiment":       sent if sent is not None else 0.0,
-            "volume_trend":    company["volume_trend"],
-        }
+        return {"momentum_12_1": company["momentum_12_1"],
+                "price_vs_200dma": company["price_vs_200dma"],
+                "sentiment": sent if sent is not None else 0.0,
+                "volume_trend": company["volume_trend"]}
 
     def fit(self, universe: list[dict]) -> "MarketSignalEncoder":
         feats = [self._features(c) for c in universe]
@@ -80,28 +89,26 @@ class MarketSignalEncoder:
         self._uni = _Universe(mean, std)
         return self
 
-    def encode(self, company: dict) -> tuple[np.ndarray, float]:
+    def score(self, company: dict) -> tuple[np.ndarray, float]:
         assert self._uni, "call .fit(universe) first"
         feat = self._features(company)
         contribs = {f: MARKET_FACTORS[f][0] * MARKET_FACTORS[f][1] *
                     (feat[f] - self._uni.mean[f]) / self._uni.std[f] for f in MARKET_FACTORS}
         composite = float(sum(contribs.values()))
-
         dist = _softmax(np.array([composite, 0.0, -composite]) * self.temp)
 
         if abs(composite) < 1e-9:
             agreement = 0.5
         else:
             s = np.sign(composite)
-            agreement = sum(MARKET_FACTORS[f][0] for f in MARKET_FACTORS
-                            if np.sign(contribs[f]) == s)
+            agreement = sum(MARKET_FACTORS[f][0] for f in MARKET_FACTORS if np.sign(contribs[f]) == s)
         vol_damp = float(np.exp(-_VOL_K * max(0.0, company.get("volatility", _VOL_FLOOR) - _VOL_FLOOR)))
         confidence = float(confidence_from_dist(dist) * agreement * vol_damp)
         return dist, confidence
 
     def explain(self, company: dict) -> dict:
         feat = self._features(company)
-        dist, conf = self.encode(company)
+        dist, conf = self.score(company)
         return {"sentiment": round(feat["sentiment"], 2),
                 "dist": {k: round(float(v), 2) for k, v in zip(("over", "neut", "under"), dist)},
                 "confidence": round(conf, 2)}
@@ -111,7 +118,6 @@ def _softmax(z: np.ndarray) -> np.ndarray:
     z = z - z.max(); e = np.exp(z); return e / e.sum()
 
 
-# ── Worked example: market features + headlines for the same 6 names ──────────
 MARKET_UNIVERSE = [
     dict(name="QualCheap",  momentum_12_1=-.08, price_vs_200dma=-.05, volume_trend=-.10, volatility=.25,
          headlines=["Q3 revenue misses estimates", "Analyst downgrade on slowing demand", "Guidance left unchanged"]),
@@ -129,14 +135,16 @@ MARKET_UNIVERSE = [
 
 if __name__ == "__main__":
     mkt = MarketSignalEncoder().fit(MARKET_UNIVERSE)
-    print("Snath Basis — Stream B (MarketSignalEncoder)\n" + "=" * 64)
+    assert isinstance(mkt, AbstractModalEncoder)
+    print(f"Snath Basis — Stream B (MarketSignalEncoder : AbstractModalEncoder, "
+          f"modality='{mkt.modality}')\n" + "=" * 64)
     print(f"{'name':<11}{'sent':>6}  {'over':>5}{'neut':>6}{'under':>7}  {'conf':>5}  lean")
     print("-" * 64)
     for c in MARKET_UNIVERSE:
         e = mkt.explain(c); d = e["dist"]; lean = max(d, key=d.get)
         print(f"{c['name']:<11}{e['sentiment']:>6}  {d['over']:>5}{d['neut']:>6}{d['under']:>7}  {e['confidence']:>5}  {lean}")
 
-    # ── the payoff: TWO real streams → real basis → routing ───────────────────
+    # the payoff: two real AbstractModalEncoders → real basis → published router
     from fundamentals_encoder import FundamentalsEncoder, UNIVERSE
     from basis_graph import MarketDivergenceRouter
     fund = FundamentalsEncoder().fit(UNIVERSE)
@@ -150,8 +158,8 @@ if __name__ == "__main__":
     leans = ("over", "neut", "under")
     for fc in UNIVERSE:
         mc = next(x for x in MARKET_UNIVERSE if x["name"] == fc["name"])
-        v_a, c_a = fund.encode(fc)
-        v_b, c_b = mkt.encode(mc)
+        v_a, c_a = fund.score(fc)
+        v_b, c_b = mkt.score(mc)
         d = router.divergence(v_a, v_b)
         dec = router.route(c_a, c_b, d)
         la, lb = leans[int(np.argmax(v_a))], leans[int(np.argmax(v_b))]

@@ -137,8 +137,8 @@ if __name__ == "__main__":
     print("Screening — logging confident divergences to D_hard\n" + "=" * 56)
     for fc in UNIVERSE:
         mc = next(x for x in MARKET_UNIVERSE if x["name"] == fc["name"])
-        v_a, c_a = fund.encode(fc)
-        v_b, c_b = mkt.encode(mc)
+        v_a, c_a = fund.score(fc)
+        v_b, c_b = mkt.score(mc)
         d = router.divergence(v_a, v_b)
         dec = router.route(c_a, c_b, d)
         ev = q.log(fc["name"], v_a, c_a, v_b, c_b, d, dec, asof)
