@@ -27,6 +27,14 @@ DECISION_CLASSES = ("overweight", "neutral", "underweight")
 C = len(DECISION_CLASSES)
 
 
+def confidence_from_dist(dist) -> float:
+    """Universal stream confidence: distribution PEAKEDNESS in [0,1].
+    0 = uniform (no signal), 1 = one-hot (max signal). BOTH streams compute
+    confidence this way so the router's scalars are comparable across them."""
+    peak = (float(np.asarray(dist).max()) - 1.0 / C) / (1.0 - 1.0 / C)
+    return max(0.0, peak)
+
+
 class RouteDecision(str, Enum):
     COMMIT_TRAJECTORY = "COMMIT_TRAJECTORY"   # Execute  — agree, both confident
     TRIGGER_REPLAN    = "TRIGGER_REPLAN"      # Investigate — disagree, both confident
@@ -34,10 +42,12 @@ class RouteDecision(str, Enum):
     DEFER             = "DEFER"               # one stream confident, the other not
 
 
-# ── Routing thresholds (calibrate later on realised-return backtests) ─────────
-TAU_HIGH = 0.60   # confidence floor to "act"
-TAU_LOW  = 0.30   # confidence floor to even "defer"
-DELTA    = 0.45   # basis (divergence) threshold separating agree / disagree
+# ── Routing thresholds (provisional — calibrate on realised-return backtests) ──
+# Confidence is distribution peakedness in [0,1] (see confidence_from_dist), so a
+# "confident" 3-class call sits ~0.4–0.7 and a flat one near 0. Thresholds match.
+TAU_HIGH = 0.35   # confidence floor to "act"
+TAU_LOW  = 0.12   # below this a stream carries effectively no signal
+DELTA    = 0.40   # basis (divergence) threshold separating agree / disagree
 
 
 # ── Stream encoders ───────────────────────────────────────────────────────────
@@ -50,8 +60,7 @@ class FundamentalsEncoder:
 
     def encode(self, x_fundamentals) -> tuple[np.ndarray, float]:
         v = _softmax(np.asarray(x_fundamentals, dtype=float))
-        conf = float(v.max())                       # TODO: SNR-style confidence
-        return v, conf
+        return v, confidence_from_dist(v)
 
 
 class MarketSignalEncoder:
@@ -60,8 +69,7 @@ class MarketSignalEncoder:
 
     def encode(self, x_market) -> tuple[np.ndarray, float]:
         v = _softmax(np.asarray(x_market, dtype=float))
-        conf = float(v.max())
-        return v, conf
+        return v, confidence_from_dist(v)
 
 
 # ── The router (AbstractDivergenceRouter contract, V1–V6) ─────────────────────
