@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import numpy as np
+import torch
+import torch.nn as nn
 
 import _lar  # noqa: F401
 from core.interfaces import AbstractModalEncoder
@@ -52,11 +54,28 @@ class _Universe:
     std:  dict
 
 
-class MarketSignalEncoder(AbstractModalEncoder):
+class MarketSignalEncoder(AbstractModalEncoder, nn.Module):
+    """Stream B: market-side encoder, upgraded to torch.nn.Module with LoRA support.
+    
+    The base market-signal weights are frozen; the DMN sleep cycle injects Rank-1
+    (A, B) LoRA matrices to structurally repair the latent geometry without
+    touching the routing core.
+    """
 
     def __init__(self, temperature: float = 1.2):
+        super().__init__()
         self.temp = temperature
         self._uni: _Universe | None = None
+        # LoRA Rank-1 matrices (injected by BasisDMN after sleep cycle)
+        self.lora_A: torch.Tensor | None = None
+        self.lora_B: torch.Tensor | None = None
+
+    def load_lora(self, pt_path: str) -> None:
+        """Surgically load the LoRA adapter for this encoder from a .pt file."""
+        state = torch.load(pt_path, weights_only=True)
+        if state.get("target_encoder") == "market":
+            self.lora_A = state["A"]
+            self.lora_B = state["B"]
 
     # ── AbstractModalEncoder contract (M1–M3) ─────────────────────────────────
     @property
@@ -67,8 +86,15 @@ class MarketSignalEncoder(AbstractModalEncoder):
     def modality(self) -> str:
         return "market_signal"
 
-    def encode(self, company: dict) -> np.ndarray:
-        return self.score(company)[0]
+    def encode(self, company: dict) -> np.ndarray:   # M3: with optional LoRA
+        dist, _ = self.score(company)
+        if self.lora_A is not None and self.lora_B is not None:
+            with torch.no_grad():
+                t = torch.tensor(dist, dtype=torch.float32)
+                adapted = t + torch.matmul(torch.matmul(t, self.lora_A), self.lora_B)
+                adapted = torch.softmax(adapted, dim=0)
+                return adapted.numpy()
+        return dist
 
     # ── encoder internals ─────────────────────────────────────────────────────
     def _features(self, company: dict) -> dict:

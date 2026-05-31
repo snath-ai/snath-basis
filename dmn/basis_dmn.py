@@ -19,6 +19,9 @@ from dataclasses import dataclass, asdict
 from collections import defaultdict, Counter
 import os, sys, json, hmac, hashlib, datetime
 from pathlib import Path
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BASIS = os.path.dirname(_HERE)
@@ -98,12 +101,40 @@ class BasisDMN:
 
             a = BasisAdapter(cid, centroid, winner, win_rate, mean_return,
                              len(g), datetime.datetime.utcnow().isoformat() + "Z").sign()
-            (self.adapter_dir / f"{cid.replace('->', '__')}.json").write_text(
-                json.dumps(asdict(a), indent=2))
+            json_path = self.adapter_dir / f"{cid.replace('->', '__')}.json"
+            json_path.write_text(json.dumps(asdict(a), indent=2))
             built.append(a)
+
+            # ── SYSTEM 2: PyTorch LoRA (Deep Cortical Restructuring) ────────────
+            # Train Rank-1 A,B matrices to close the divergence gap for this cluster.
+            # The 'winner' stream is the target; the 'loser' stream is the faulty input.
+            winner_vecs  = [e.v_a if winner == "fundamentals" else e.v_b for e in g]
+            faulty_vecs  = [e.v_b if winner == "fundamentals" else e.v_a for e in g]
+            target_enc   = "market" if winner == "fundamentals" else "fundamentals"
+
+            target_t = torch.tensor(winner_vecs, dtype=torch.float32)
+            faulty_t = torch.tensor(faulty_vecs, dtype=torch.float32)
+            dim = target_t.shape[1]
+
+            A = nn.Parameter(torch.randn(dim, 1) * 0.01)
+            B = nn.Parameter(torch.randn(1, dim) * 0.01)
+            optimizer = optim.AdamW([A, B], lr=0.1)
+
+            for _ in range(150):
+                optimizer.zero_grad()
+                adapted = faulty_t + torch.matmul(torch.matmul(faulty_t, A), B)
+                loss = torch.nn.functional.l1_loss(adapted, target_t)
+                loss.backward()
+                optimizer.step()
+
+            pt_path = self.adapter_dir / f"{cid.replace('->', '__')}.pt"
+            torch.save({"A": A.detach(), "B": B.detach(), "target_encoder": target_enc,
+                        "cluster_id": cid, "final_loss": round(loss.item(), 6)}, str(pt_path))
+
             if verbose:
                 print(f"  ✓ {cid:<28} n={len(g):<3} winner={winner:<12} "
-                      f"win_rate={win_rate:<5} mean_ret={mean_return:+.3f}")
+                      f"win_rate={win_rate:<5} mean_ret={mean_return:+.3f}  "
+                      f"LoRA loss={loss.item():.4f}")
         return built
 
     def stats(self) -> dict:

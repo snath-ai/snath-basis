@@ -2,18 +2,16 @@
 Snath Basis — BasisAdapterRouter (inference-time, two-pass).
 
 Loads the consolidated, HMAC-signed BasisAdapter library and uses it to RESOLVE a
-new divergence from memory rather than merely flagging it. This is the Snath Locus
-inject → run → restore pattern adapted to the factor-model stage: instead of adding
-a LoRA delta to a frozen attention head, it matches the incoming Δ-vector to a learned
-cluster and applies that cluster's resolution prior.
+new divergence from memory rather than merely flagging it. This is the full
+Kahneman Hybrid Architecture:
 
-Two-pass logic:
-  pass 1 — the base MarketDivergenceRouter routes on scalars (V1–V6). If it does NOT
-           return TRIGGER_REPLAN, nothing to resolve — return as-is.
-  pass 2 — if it IS an Investigate (confident disagreement), find the nearest verified
-           adapter by Δ-vector cosine similarity (>= tau_sim). If one matches, resolve
-           toward the stream that historically wins that disagreement type, carrying the
-           memory's win-rate and mean-return as provenance. No match → stay Investigate.
+  System 1 — fast JSON centroid spatial match (O(log N), zero PyTorch).
+             Instantly classifies the failure type and overrides the routing decision.
+
+  System 2 — deep PyTorch LoRA restructuring.
+             Surgically loads the matching .pt Rank-1 (A, B) matrices into the
+             *faulty* encoder, permanently warping its latent geometry so that the
+             frozen router is mathematically appeased without ever being touched.
 
 Security: every adapter is HMAC-signed by the DMN; this router verifies before trusting.
 A tampered adapter fails verification and is skipped — the system falls back to Investigate.
@@ -71,26 +69,49 @@ class BasisAdapterRouter:
                 best, best_s = a, s
         return best
 
-    def resolve(self, v_a, v_b, base_decision, conf_a, conf_b):
-        """Returns (decision, note). Only Investigate cases are resolved from memory."""
+    def resolve(self, v_a, v_b, base_decision, conf_a, conf_b,
+                enc_a=None, enc_b=None):
+        """Returns (decision, note).
+
+        System 1: fast JSON centroid spatial match.
+        System 2: if a match is found, surgically load the matching .pt LoRA into
+                  the faulty encoder (enc_a or enc_b) to structurally repair its
+                  latent geometry — not just override the routing decision.
+
+        Pass enc_a (FundamentalsEncoder) and enc_b (MarketSignalEncoder) to enable
+        System 2. If omitted, only the System 1 decision override is applied.
+        """
         if base_decision != RouteDecision.TRIGGER_REPLAN:
             return base_decision, "no divergence to resolve"
 
         v_a, v_b = np.asarray(v_a, float), np.asarray(v_b, float)
         delta = v_a - v_b
+
+        # ── SYSTEM 1: Fast JSON Centroid Spatial Match ──────────────────────────
         a = self._nearest(delta)
         if a is None:
             return base_decision, "no matching memory — flag for investigation"
 
         if a.winner == "fundamentals":
             lean = DECISION_CLASSES[int(np.argmax(v_a))]
-            decision = RouteDecision.COMMIT_TRAJECTORY
+            faulty_enc, target_enc_name = enc_b, "market"
         elif a.winner == "market":
             lean = DECISION_CLASSES[int(np.argmax(v_b))]
-            decision = RouteDecision.COMMIT_TRAJECTORY
+            faulty_enc, target_enc_name = enc_a, "fundamentals"
         else:
             return base_decision, f"memory [{a.cluster_id}] inconclusive — investigate"
 
-        note = (f"memory [{a.cluster_id}] n={a.n_events}: {a.winner} win "
-                f"{a.win_rate:.0%}, mean_ret {a.mean_return:+.1%} -> lean {lean}")
+        decision = RouteDecision.COMMIT_TRAJECTORY
+        note = (f"[System 1] memory [{a.cluster_id}] n={a.n_events}: {a.winner} wins "
+                f"{a.win_rate:.0%}, mean_ret {a.mean_return:+.1%} → lean {lean}")
+
+        # ── SYSTEM 2: Surgical PyTorch LoRA Loading ─────────────────────────────
+        if faulty_enc is not None:
+            pt_path = self.adapter_dir / f"{a.cluster_id.replace('->', '__')}.pt"
+            if pt_path.exists() and hasattr(faulty_enc, 'load_lora'):
+                faulty_enc.load_lora(str(pt_path))
+                note += f" | [System 2] LoRA loaded into '{target_enc_name}' encoder"
+            elif self.verbose:
+                print(f"[BasisAdapterRouter] no .pt file at {pt_path} — System 1 only")
+
         return decision, note

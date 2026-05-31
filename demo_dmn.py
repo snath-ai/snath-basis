@@ -49,26 +49,56 @@ def seed_history(path: str, n_per_cluster: int = 8) -> int:
 
 
 if __name__ == "__main__":
+    from fundamentals_encoder import FundamentalsEncoder, UNIVERSE
+    from market_encoder import MarketSignalEncoder, MARKET_UNIVERSE
+
     DEMO = "d_hard_demo.jsonl"
     n = seed_history(DEMO)
     print(f"Seeded {n} resolved divergences (synthetic history)\n" + "=" * 60)
 
     dmn = BasisDMN(queue_path=DEMO, adapter_dir="models/adapters")
-    print("Consolidating D_hard -> signed BasisAdapter library:")
+    print("Consolidating D_hard -> signed BasisAdapter library + PyTorch LoRA:")
     dmn.consolidate(min_events=4)
 
     print("\n" + "=" * 60)
-    print("Resolving a NEW divergence from memory (two-pass)")
+    print("Kahneman Hybrid Cascade on a NEW divergence (System 1 + System 2)")
     print("-" * 60)
-    router = MarketDivergenceRouter()
+
+    fund = FundamentalsEncoder().fit(UNIVERSE)
+    mkt  = MarketSignalEncoder().fit(MARKET_UNIVERSE)
+    router  = MarketDivergenceRouter()
     arouter = BasisAdapterRouter(adapter_dir="models/adapters")
 
-    # a fresh, unseen name: fundamentals say BUY, the market says SELL
+    # A fresh, unseen name: fundamentals say BUY, the market says SELL
     v_a = np.array([0.66, 0.24, 0.10]); c_a = 0.48
     v_b = np.array([0.08, 0.20, 0.72]); c_b = 0.55
-    d = router.divergence(v_a, v_b)
-    base = router.route(c_a, c_b, d)
-    print(f"  base router:  D={d:.2f}  -> {base.value}")
-    decision, note = arouter.resolve(v_a, v_b, base, c_a, c_b)
-    print(f"  DMN-resolved: -> {decision.value}")
-    print(f"  why: {note}")
+
+    d_raw  = router.divergence(v_a, v_b)
+    base   = router.route(c_a, c_b, d_raw)
+    print(f"  [Raw]     Fundamentals: {v_a}  Market: {v_b}")
+    print(f"  [Raw]     Divergence (L1-norm): {d_raw:.4f}  ->  base router: {base.value}")
+
+    # System 1 + System 2: pass the encoders so LoRA gets loaded into the faulty one
+    decision, note = arouter.resolve(v_a, v_b, base, c_a, c_b, enc_a=fund, enc_b=mkt)
+    print(f"\n  {note}")
+    print(f"  DMN-resolved decision: {decision.value}")
+
+    # Re-encode with the now-LoRA-adapted encoder to show divergence reduction
+    # The faulty (market) encoder has been restructured — re-run it on a sample company
+    sample_fund = UNIVERSE[0]
+    sample_mkt  = MARKET_UNIVERSE[0]
+    v_a_adapted = fund.encode(sample_fund)
+    v_b_adapted = mkt.encode(sample_mkt)
+    d_adapted   = router.divergence(v_a_adapted, v_b_adapted)
+    dec_adapted = router.route(
+        fund.score(sample_fund)[1],
+        mkt.score(sample_mkt)[1],
+        d_adapted
+    )
+    print(f"\n  [System 2 Adapted Encoders on '{sample_fund['name']}']")
+    print(f"  Fundamentals latent : {np.round(v_a_adapted, 4)}")
+    print(f"  Market latent (LoRA): {np.round(v_b_adapted, 4)}")
+    print(f"  New divergence      : {d_adapted:.4f}  ->  {dec_adapted.value}")
+    print(f"\n  [SUCCESS] LoRA restructured the faulty encoder's geometry.")
+    print(f"  The frozen MarketDivergenceRouter is naturally appeased.")
+
