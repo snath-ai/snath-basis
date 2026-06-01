@@ -15,6 +15,28 @@ Kahneman Hybrid Architecture:
 
 Security: every adapter is HMAC-signed by the DMN; this router verifies before trusting.
 A tampered adapter fails verification and is skipped — the system falls back to Investigate.
+
+Identification / correction trust asymmetry
+-------------------------------------------
+System 1 centroid matching (_nearest) is trust-invariant: the geometric fingerprint
+of a regime cluster is durable — "market beats fundamentals in momentum spreads" is
+a structurally stable characterisation across years even when the specific learned
+correction (the LoRA delta) is not.  _nearest() therefore carries no temporal trust
+gate and fires regardless of adapter age.
+
+System 2 LoRA injection is perishable: the learned delta encodes a correction trained
+on a specific market epoch and regime characterisation; a delta trained on 2022
+rate-shock conditions may be wrong in sign for 2025 conditions.  The temporal gate
+W = exp(-λ·Δt) applies only at the .pt loading step in resolve().
+
+When W < min_trust, routing proceeds on System 1 logic alone — the route decision
+(COMMIT_TRAJECTORY) and the regime identification are unchanged; only the encoder
+correction is withheld.  The audit note records both the identification event and the
+stale-adapter refusal.  This is the intended degradation path: identify correctly,
+correct conservatively.
+
+Formalised in "Architecture Is All You Need" (Sajeev 2026), §3.4 Remark (Temporal
+Decay and Synaptic Depression).
 """
 
 from __future__ import annotations
@@ -100,7 +122,14 @@ class BasisAdapterRouter:
 
     def _nearest(self, delta, winner: str = "") -> BasisAdapter | None:
         """Find nearest adapter by centroid cosine similarity.
-        Gap A: if winner is known, restrict search to matching winner entries."""
+        Gap A: if winner is known, restrict search to matching winner entries.
+
+        Trust-invariant — no temporal gate.
+        The centroid fingerprint identifies the regime cluster type; that
+        identification is durable across years even when the learned LoRA
+        correction is not.  The temporal gate lives in resolve() and applies
+        only to System 2 (.pt loading), never to this System 1 lookup.
+        """
         best, best_s = None, self.tau_sim
         for a in self._adapters:
             if winner and a.winner != winner:
@@ -129,9 +158,12 @@ class BasisAdapterRouter:
         v_a, v_b = np.asarray(v_a, float), np.asarray(v_b, float)
         delta = v_a - v_b
 
-        # ── SYSTEM 1: Fast JSON Centroid Spatial Match ──────────────────────────
-        # Determine which stream should win to narrow the typed cache search.
-        # (We don't know yet — do open search first, then type-check.)
+        # ── SYSTEM 1: Fast JSON Centroid Spatial Match (trust-invariant) ────────
+        # _nearest() fires regardless of adapter age: the geometric fingerprint
+        # of a failure cluster is durable.  The centroid match correctly names
+        # the regime type and sets the route decision even when System 2 is
+        # fully stale.  No trust gate here — trust is checked below, at the
+        # .pt loading step only.
         a = self._nearest(delta)
         if a is None:
             return base_decision, "no matching memory — flag for investigation"
