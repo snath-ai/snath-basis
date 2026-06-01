@@ -8,7 +8,7 @@ stream content (V4). The two streams are AbstractModalEncoder implementations
 (FundamentalsEncoder, MarketSignalEncoder); stream independence (V1) is enforced at
 that encoder boundary, so the router itself never touches both encoders' state.
 
-A Derivative Work of the pre-employment Lár-JEPA prior art (Apache 2.0,
+A Derivative Work of the Lár-JEPA cognitive architecture (Apache 2.0,
 github.com/snath-ai/Lar-JEPA), in the quantitative-finance domain.
 
 Run:  python basis_graph.py

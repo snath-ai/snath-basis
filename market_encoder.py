@@ -9,7 +9,7 @@ over the same decision classes plus a confidence (volatility damps it).
 Lightweight by design (no model downloads): sentiment is a transparent lexicon scorer
 that FinBERT later drops in to replace.
 
-Derivative Work of the pre-employment Lár-JEPA prior art (Apache 2.0), finance domain.
+Derivative Work of the Lár-JEPA cognitive architecture (Apache 2.0), finance domain.
 
 Run:  python market_encoder.py
 """

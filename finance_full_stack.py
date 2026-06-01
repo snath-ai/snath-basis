@@ -1,17 +1,17 @@
 """
 Snath Basis — Full-Stack Demonstration of ALL TEN Lár-JEPA ABCs (finance domain)
 ================================================================================
-The finance analog of the public examples/powergrid_full_stack.py. It is the
-canonical reference proving that every abstract interface in the PUBLIC, genesis-
-anchored core/interfaces.py (~/Desktop/Lar_Main/lar_jepa) is:
+The finance instantiation of the Lár-JEPA ten-ABC cognitive contract. It proves
+that every abstract interface in core/interfaces.py (github.com/snath-ai/Lar-JEPA)
+is:
 
   1. instantiable        — a concrete finance subclass exists for all ten ABCs,
   2. domain-agnostic     — none of the contracts needs a specific domain,
   3. mutually composable — they wire into one deterministic pipeline unchanged.
 
-Every contract is imported from the PUBLIC repo, so Snath Basis is a clean
-Derivative Work that *proves Lár-JEPA works* in quantitative finance — the
-non-pharmaceutical counterpart to Snath Locus.
+This is the quantitative-finance proof of domain isomorphism — the same routing
+spine that governs CRISPR drug screening (Snath Locus) and aviation sensor fusion
+(Snath Aviation) governs multi-stream investment decisions without modification.
 
 THE TEN ABCs (finance instantiations)
 -------------------------------------
@@ -38,7 +38,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import _lar  # noqa: F401  — public Lar_Main/lar_jepa on the path
+import _lar  # noqa: F401  — bootstraps Lár-JEPA engine path
 from lar import GraphState, GraphExecutor, BaseNode, AuditLogger
 from core.interfaces import (
     AbstractCognitiveNode,        # 1

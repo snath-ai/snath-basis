@@ -12,7 +12,7 @@ that is cheap on value but junk on quality (a value trap) sends its factors in o
 directions, so the encoder is rightly *unsure*. That low confidence is what later lets
 the divergence router defer rather than act.
 
-Derivative Work of the pre-employment Lár-JEPA prior art (Apache 2.0), finance domain.
+Derivative Work of the Lár-JEPA cognitive architecture (Apache 2.0), finance domain.
 
 Run:  python fundamentals_encoder.py
 """

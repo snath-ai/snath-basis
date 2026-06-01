@@ -1,26 +1,23 @@
 """
-_lar.py — connect Snath Basis to the PUBLIC, genesis-anchored Lár-JEPA engine.
-
-Snath Basis implements the published ten-ABC cognitive contract (core.interfaces)
-and the RouteDecision enum (core.types) from the **public, Apache-2.0, genesis-
-anchored** prior art at ~/Desktop/Lar_Main/lar_jepa — the exact codebase fingerprinted
-in the genesis baseline. Importing the contract from the *anchored public source*
-(not a local dev copy) is what makes Snath Basis a clean Derivative Work of the
-pre-employment prior art, in the quantitative-finance domain — exactly as Snath Locus
-is in the biomedical domain.
+_lar.py — locate the Lár-JEPA engine for Snath Basis.
 
 Resolution order:
-  1. $SNATH_BASIS_LARJEPA           — explicit override (CI / other machines)
-  2. ~/Desktop/Lar_Main/lar_jepa    — PUBLIC, genesis-anchored prior art (preferred)
-  3. ../lar_jepa                    — local dev copy (fallback only)
+  1. $SNATH_BASIS_LARJEPA   — set this env var to point to your lar_jepa/ directory
+  2. ../lar_jepa            — sibling directory (clone Lar-JEPA next to this repo)
+  3. ~/lar_jepa             — home directory install
+
+To install the engine:
+  git clone https://github.com/snath-ai/Lar-JEPA.git
+  export SNATH_BASIS_LARJEPA=/path/to/Lar-JEPA/lar_jepa
 """
 import os
 import sys
 
 _CANDIDATES = [
     os.environ.get("SNATH_BASIS_LARJEPA"),
-    os.path.expanduser("~/Desktop/Lar_Main/lar_jepa"),                              # public, anchored
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lar_jepa")),     # dev fallback
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Lar-JEPA", "lar_jepa")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lar_jepa")),
+    os.path.expanduser("~/lar_jepa"),
 ]
 
 _LAR_JEPA = None
@@ -30,3 +27,11 @@ for _p in _CANDIDATES:
             sys.path.insert(0, _p)
         _LAR_JEPA = _p
         break
+
+if not _LAR_JEPA:
+    raise RuntimeError(
+        "Lár-JEPA engine not found.\n"
+        "Clone it and set the env var:\n"
+        "  git clone https://github.com/snath-ai/Lar-JEPA.git\n"
+        "  export SNATH_BASIS_LARJEPA=/path/to/Lar-JEPA/lar_jepa"
+    )
