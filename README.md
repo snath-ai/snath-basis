@@ -119,7 +119,7 @@ where Δt = years since the adapter was trained
 | `market_regime` (momentum, sentiment shifts) | 0.50 | 1.4 years |
 | `structural` (durable cross-sectional relationships) | 0.02 | 34.7 years |
 
-Adapters with `W < 0.40` are refused before injection. **The same mathematical formula governs temporal trust in Snath Locus (genetic mutation rates) and Snath Aviation (atmospheric failure modes).** Domain isomorphism is not a metaphor — the same λ-decay function, applied to the same threshold, governs what the system trusts across biology, finance, and aviation.
+Adapters with `W < 0.40` are refused before injection. **The same mathematical formula governs temporal trust in Snath Aviation (atmospheric failure modes) and Snath Basis (market regime shifts).** Domain isomorphism is not a metaphor — the same λ-decay function, applied to the same threshold, governs what the system trusts across different domains without modification.
 
 ---
 
@@ -164,15 +164,14 @@ The routing invariants, the Safety-Learning Equivalence theorem, and the proof o
 
 ## Domain isomorphism
 
-Snath Basis is one of three production instantiations proving that the V1–V6 routing contract is domain-agnostic. The other two:
+Snath Basis is one of several production instantiations proving that the V1–V6 routing contract is domain-agnostic:
 
 | Repo | Domain | Stream A | Stream B | Failure class |
 |---|---|---|---|---|
-| [Snath Locus](https://github.com/snath-ai/snath-locus) | CRISPR drug screening | DNA structure (DNABERT-2) | Patient RNA profile (GeneJEPA) | `pooled_screen` / `genomic_structure` |
 | **Snath Basis** | Quantitative finance | Fundamental analysis | Market signals | `market_regime` / `structural` |
 | [Snath Aviation](https://github.com/snath-ai/snath-aviation) | Aviation sensor fusion | Radar | Pitot tube | `weather_induced` / `hardware_struct` |
 
-The temporal decay formula `W = exp(−λ · Δt)`, the identification/correction trust asymmetry, and the System 1/System 2 pipeline are **identical across all three domains**. The λ constants and failure-class labels are the only domain-specific parameters.
+The temporal decay formula `W = exp(−λ · Δt)`, the identification/correction trust asymmetry, and the System 1/System 2 pipeline are **identical across all instantiations**. The λ constants and failure-class labels are the only domain-specific parameters.
 
 ---
 
