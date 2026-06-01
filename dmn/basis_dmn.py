@@ -128,9 +128,10 @@ class BasisDMN:
                 optimizer.step()
 
             pt_path = self.adapter_dir / f"{cid.replace('->', '__')}.pt"
-            # Gap B/C: add target_encoder type-safety + temporal decay fields so
-            # BasisAdapterRouter can (a) refuse cross-encoder injection and
-            # (b) compute trust weight W = exp(-λ·Δt) at re-arm time (Aviation pattern).
+            # target_encoder type-safety + temporal-decay fields. BasisAdapterRouter
+            # (a) refuses cross-encoder injection via target_encoder, and (b) computes
+            # the trust weight W = exp(-λ·Δt) from created_at/failure_class at load time,
+            # refusing stale adapters below min_trust — identical formula to Aviation/Locus.
             torch.save({
                 "A":             A.detach(),
                 "B":             B.detach(),

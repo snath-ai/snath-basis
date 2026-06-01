@@ -18,7 +18,7 @@ A tampered adapter fails verification and is skipped — the system falls back t
 """
 
 from __future__ import annotations
-import os, json, glob
+import os, json, glob, math, datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,11 +33,39 @@ def _cos(a, b) -> float:
     return float(a @ b / (na * nb)) if na and nb else 0.0
 
 
+# ── Temporal decay (identical formula to Snath Aviation / Snath Locus) ────────
+# W = exp(-λ · Δt), Δt = fractional years since the adapter was trained.
+# Same magnitudes as the other two domains; only the class labels are finance-
+# specific. A market-regime adapter ages like a weather pattern (fast); a
+# structural-relationship adapter ages slowly.
+_LAMBDA: dict = {
+    "market_regime": 0.50,   # regimes shift quickly — fast decay (≡ weather_induced)
+    "structural":    0.02,   # durable cross-sectional relationships — slow decay
+    "default":       0.10,
+}
+
+
+def _decay_weight(created_at_iso: str | None, failure_class: str = "default") -> float:
+    """W = exp(-λ · Δt). Returns 1.0 if no timestamp (treat as current)."""
+    if not created_at_iso:
+        return 1.0
+    try:
+        created = datetime.datetime.fromisoformat(created_at_iso.replace("Z", "+00:00"))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        delta_years = (now - created).total_seconds() / (365.25 * 24 * 3600)
+        lam = _LAMBDA.get(failure_class, _LAMBDA["default"])
+        return math.exp(-lam * max(0.0, delta_years))
+    except Exception:
+        return 1.0
+
+
 class BasisAdapterRouter:
     def __init__(self, adapter_dir: str = "models/adapters",
-                 tau_sim: float = 0.90, verbose: bool = False):
+                 tau_sim: float = 0.90, min_trust: float = 0.40,
+                 verbose: bool = False):
         self.adapter_dir = Path(adapter_dir)
         self.tau_sim = tau_sim
+        self.min_trust = min_trust   # temporal-decay floor (parity with Aviation 0.40)
         self.verbose = verbose
         self._adapters: list[BasisAdapter] = []
         # Gap A: typed cache (cluster_id, winner) → BasisAdapter.
@@ -125,10 +153,22 @@ class BasisAdapterRouter:
         if faulty_enc is not None:
             pt_path = self.adapter_dir / f"{a.cluster_id.replace('->', '__')}.pt"
             if pt_path.exists() and hasattr(faulty_enc, 'load_lora'):
-                # Gap B: load_lora() inside the encoder verifies target_encoder field —
-                # a "fundamentals" LoRA will be silently ignored by MarketSignalEncoder.
-                faulty_enc.load_lora(str(pt_path))
-                note += f" | [System 2] LoRA loaded into '{target_enc_name}' encoder"
+                # Temporal decay gate (parity with Aviation/Locus): a stale adapter
+                # is refused before injection. W = exp(-λ·Δt); below min_trust the
+                # geometry it learned is too old to trust — fall back to System 1.
+                import torch as _torch
+                meta = _torch.load(str(pt_path), map_location="cpu")
+                W = _decay_weight(meta.get("created_at"),
+                                  meta.get("failure_class", "default"))
+                if W >= self.min_trust:
+                    # Gap B: load_lora() verifies target_encoder — a "fundamentals"
+                    # LoRA is silently ignored by MarketSignalEncoder and vice versa.
+                    faulty_enc.load_lora(str(pt_path))
+                    note += (f" | [System 2] LoRA loaded into '{target_enc_name}' "
+                             f"encoder (trust W={W:.2f})")
+                else:
+                    note += (f" | [System 2] STALE adapter refused "
+                             f"(W={W:.2f} < {self.min_trust}); System 1 only")
             elif self.verbose:
                 print(f"[BasisAdapterRouter] no .pt file at {pt_path} — System 1 only")
 
