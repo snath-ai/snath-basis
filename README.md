@@ -169,7 +169,7 @@ Snath Basis is one of several production instantiations proving that the V1–V6
 | Repo | Domain | Stream A | Stream B | Failure class |
 |---|---|---|---|---|
 | **Snath Basis** | Quantitative finance | Fundamental analysis | Market signals | `market_regime` / `structural` |
-| [Snath Aviation](https://github.com/snath-ai/snath-aviation) | Aviation sensor fusion | Radar | Pitot tube | `weather_induced` / `hardware_struct` |
+| [Snath Aviation](https://github.com/snath-ai/snath-aviation) | Aviation sensor routing | Radar | Pitot tube | `weather_induced` / `hardware_struct` |
 
 The temporal decay formula `W = exp(−λ · Δt)`, the identification/correction trust asymmetry, and the System 1/System 2 pipeline are **identical across all instantiations**. The λ constants and failure-class labels are the only domain-specific parameters.
 
