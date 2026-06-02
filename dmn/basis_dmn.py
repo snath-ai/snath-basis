@@ -29,6 +29,7 @@ if _BASIS not in sys.path:
     sys.path.insert(0, _BASIS)
 
 from dhard import DHardQueue, CLASSES   # the D_hard curriculum
+from .sigreg import SIGRegLoss
 
 _ADAPTER_KEY = b"snath_basis_adapter_2026"
 _MIN_EVENTS  = 4     # min resolved events in a cluster before we trust an adapter
@@ -78,7 +79,8 @@ class BasisDMN:
         self.adapter_dir = Path(adapter_dir)
 
     # ── consolidation: D_hard → signed adapter library ────────────────────────
-    def consolidate(self, min_events: int = _MIN_EVENTS, verbose: bool = True):
+    def consolidate(self, min_events: int = _MIN_EVENTS, verbose: bool = True,
+                    lambda_iso: float = 0.0):
         events = [e for e in self.queue.all() if e.realised_return is not None]
         groups = defaultdict(list)
         for e in events:
@@ -119,11 +121,16 @@ class BasisDMN:
             A = nn.Parameter(torch.randn(dim, 1) * 0.01)
             B = nn.Parameter(torch.randn(1, dim) * 0.01)
             optimizer = optim.AdamW([A, B], lr=0.1)
+            sigreg = SIGRegLoss(lambda_iso=lambda_iso)
 
             for _ in range(150):
                 optimizer.zero_grad()
                 adapted = faulty_t + torch.matmul(torch.matmul(faulty_t, A), B)
                 loss = torch.nn.functional.l1_loss(adapted, target_t)
+                # SIGReg: penalise anisotropy in the adapted latent space so that
+                # Δ = softmax(v_a) − softmax(v_b) is an informative routing signal.
+                # No-op when lambda_iso=0.0 (default until AIA Experiment 3).
+                loss = loss + sigreg(adapted)
                 loss.backward()
                 optimizer.step()
 
