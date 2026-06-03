@@ -156,20 +156,22 @@ python test_temporal_decay.py
 
 The routing invariants, the Safety-Learning Equivalence theorem, and the proof of domain universality are formally established in:
 
-- Sajeev, A.V. (2026). *Divergence Is Not Noise: Multi-Stream Routing Without Modal Fusion and the Safety-Learning Equivalence.* [doi.org/10.5281/zenodo.20278781](https://doi.org/10.5281/zenodo.20278781)
 - Sajeev, A.V. (2026). *Universal Cognitive Routing: A Ten-Abstract-Base-Class Specification for Domain-Agnostic Agent Execution.* [doi.org/10.5281/zenodo.20278775](https://doi.org/10.5281/zenodo.20278775)
+- Sajeev, A.V. (2026). *Divergence Is Not Noise: Multi-Stream Routing Without Modal Fusion and the Safety-Learning Equivalence.* [doi.org/10.5281/zenodo.20278781](https://doi.org/10.5281/zenodo.20278781)
 - Sajeev, A.V. (2026). *Architecture Is All You Need: Pre-Registration and Protocol for Empirical Validation of the Lár Training Loop.* [doi.org/10.5281/zenodo.20419182](https://doi.org/10.5281/zenodo.20419182)
+- Sajeev, A.V. (2026). *Snath Robotics: Multi-Stream Divergence Routing for Humanoid Robotics.* [doi.org/10.5281/zenodo.20517446](https://doi.org/10.5281/zenodo.20517446)
 
 ---
 
 ## Domain isomorphism
 
-Snath Basis is one of several production instantiations proving that the V1–V6 routing contract is domain-agnostic:
+Snath Basis is one of four production instantiations proving that the V1–V6 routing contract is domain-agnostic:
 
 | Repo | Domain | Stream A | Stream B | Failure class |
 |---|---|---|---|---|
 | **Snath Basis** | Quantitative finance | Fundamental analysis | Market signals | `market_regime` / `structural` |
 | [Snath Aviation](https://github.com/snath-ai/snath-aviation) | Aviation sensor routing | Radar | Pitot tube | `weather_induced` / `hardware_struct` |
+| [Snath Robotics](https://github.com/snath-ai/snath-robotics) | Humanoid sensor routing | Vision | Proprioception | `environmental_transient` / `hardware_structural` |
 
 The temporal decay formula `W = exp(−λ · Δt)`, the identification/correction trust asymmetry, and the System 1/System 2 pipeline are **identical across all instantiations**. The λ constants and failure-class labels are the only domain-specific parameters.
 
