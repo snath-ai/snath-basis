@@ -172,6 +172,7 @@ Snath Basis is one of four production instantiations proving that the V1–V6 ro
 | **Snath Basis** | Quantitative finance | Fundamental analysis | Market signals | `market_regime` / `structural` |
 | [Snath Aviation](https://github.com/snath-ai/snath-aviation) | Aviation sensor routing | Radar | Pitot tube | `weather_induced` / `hardware_struct` |
 | [Snath Robotics](https://github.com/snath-ai/snath-robotics) | Humanoid sensor routing | Vision | Proprioception | `environmental_transient` / `hardware_structural` |
+| [Snath Research](https://github.com/snath-ai/snath-research) | Scientific claim verification | Paper claims | Peer reviews | `scope_overclaim` / `methodology_gap` |
 
 The temporal decay formula `W = exp(−λ · Δt)`, the identification/correction trust asymmetry, and the System 1/System 2 pipeline are **identical across all instantiations**. The λ constants and failure-class labels are the only domain-specific parameters.
 
