@@ -28,6 +28,11 @@ _BASIS = os.path.dirname(_HERE)
 if _BASIS not in sys.path:
     sys.path.insert(0, _BASIS)
 
+try:
+    from brain.abstract_dmn import AbstractDMN
+except ImportError:
+    from abc import ABC as AbstractDMN
+
 from dhard import DHardQueue, CLASSES   # the D_hard curriculum
 from .sigreg import SIGRegLoss
 
@@ -70,7 +75,7 @@ class BasisAdapter:
         return hmac.compare_digest(self.sig, want)
 
 
-class BasisDMN:
+class BasisDMN(AbstractDMN):
     """Memory + consolidation over the D_hard queue."""
 
     def __init__(self, queue_path: str = "d_hard.jsonl",
@@ -156,6 +161,18 @@ class BasisDMN:
                       f"win_rate={win_rate:<5} mean_ret={mean_return:+.3f}  "
                       f"LoRA loss={loss.item():.4f}")
         return built
+
+    def ingest(self, event) -> None:
+        self.queue.push(event)
+
+    def recall(self, query, **kwargs) -> dict:
+        path = self.adapter_dir / f"{str(query).replace('->', '__')}.json"
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except Exception:
+                pass
+        return {}
 
     def stats(self) -> dict:
         return self.queue.stats()
