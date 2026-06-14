@@ -48,6 +48,11 @@ import numpy as np
 from basis_graph import RouteDecision, DECISION_CLASSES
 from .basis_dmn import BasisAdapter
 
+try:
+    from brain.abstract_adapter_router import AbstractAdapterRouter
+except ImportError:
+    from abc import ABC as AbstractAdapterRouter
+
 
 def _cos(a, b) -> float:
     a, b = np.asarray(a, float), np.asarray(b, float)
@@ -81,7 +86,7 @@ def _decay_weight(created_at_iso: str | None, failure_class: str = "default") ->
         return 1.0
 
 
-class BasisAdapterRouter:
+class BasisAdapterRouter(AbstractAdapterRouter):
     def __init__(self, adapter_dir: str = "models/adapters",
                  tau_sim: float = 0.90, min_trust: float = 0.40,
                  verbose: bool = False):
